@@ -264,164 +264,191 @@ local function DisableFunction(Func: (...any) -> any): ()
 	end
 end
 
-local function GetAllFunctions(): {any}
-	if filtergc then
-		local ok: boolean, Result: any = SPcall(filtergc, "function")
-		if ok and Result then
-			return SType(Result) == "table" and Result or {Result}
-		end
-	end
-	
-	if getgc then
-		return getgc(false)
-	end
-	
-	return {}
-end
-
 function Bynew.Find(PossibleAC: string?): {string}
 	local Found: {string} = {}
-	local ByLocation: {[string]: {string}} = {
-		ReplicatedFirst = {},
-		Actor = {},
-		Nil = {}
-	}
 	
-	local Functions: {any} = GetAllFunctions()
-	local ProcessedScripts: {[LuaSourceContainer]: boolean} = {}
-	
-	for i: number = 1, #Functions do
-		local Func: any = Functions[i]
-		
-		if SType(Func) == "function" then
-			if isexecutorclosure and isexecutorclosure(Func) then
-				continue
-			end
+	task.spawn(function(): ()
+		SPcall(function(): ()
+			local ByLocation: {[string]: {string}} = {
+				ReplicatedFirst = {},
+				Actor = {},
+				Nil = {},
+				Registry = {}
+			}
 			
-			if islclosure and not islclosure(Func) then
-				continue
-			end
+			local ProcessedScripts: {[LuaSourceContainer]: boolean} = {}
 			
-			local Scr: LuaSourceContainer?, Location: string = GetScriptLocation(Func)
-			
-			if Scr and not ProcessedScripts[Scr] then
-				if Location == "ReplicatedFirst" or Location == "Actor" or Location == "Nil" then
-					ProcessedScripts[Scr] = true
-					
-					if PossibleAC then
-						local FullName: string = Scr:GetFullName()
-						if SFind(SLower(FullName), SLower(PossibleAC), 1, true) then
-							ByLocation[Location][#ByLocation[Location] + 1] = FullName
-						end
-					else
-						ByLocation[Location][#ByLocation[Location] + 1] = Scr:GetFullName()
-					end
-				end
-			end
-		end
-	end
-	
-	if getreg then
-		local ok: boolean, Reg: any = SPcall(getreg)
-		if ok and Reg then
-			for idx: number = 1, #Reg do
-				local Obj: any = Reg[idx]
+			local function AddScript(Scr: LuaSourceContainer, Location: string): ()
+				if ProcessedScripts[Scr] then return end
+				ProcessedScripts[Scr] = true
 				
-				if SType(Obj) == "function" then
-					if isexecutorclosure and isexecutorclosure(Obj) then
-						continue
+				if PossibleAC then
+					local FullName: string = Scr:GetFullName()
+					if SFind(SLower(FullName), SLower(PossibleAC), 1, true) then
+						ByLocation[Location][#ByLocation[Location] + 1] = FullName
 					end
-					
-					if islclosure and not islclosure(Obj) then
-						continue
-					end
-					
-					local Scr: LuaSourceContainer?, Location: string = GetScriptLocation(Obj)
-					
-					if Scr and not ProcessedScripts[Scr] then
-						if Location == "ReplicatedFirst" or Location == "Actor" or Location == "Nil" then
-							ProcessedScripts[Scr] = true
-							
-							if PossibleAC then
-								local FullName: string = Scr:GetFullName()
-								if SFind(SLower(FullName), SLower(PossibleAC), 1, true) then
-									ByLocation[Location][#ByLocation[Location] + 1] = FullName
-								end
-							else
-								ByLocation[Location][#ByLocation[Location] + 1] = Scr:GetFullName()
-							end
-						end
-					end
+				else
+					ByLocation[Location][#ByLocation[Location] + 1] = Scr:GetFullName()
 				end
-				
-				if typeof(Obj) == "thread" and getscriptfromthread then
-					local ok2: boolean, ThreadScr: any = SPcall(getscriptfromthread, Obj)
-					if ok2 and ThreadScr and not ProcessedScripts[ThreadScr] then
-						if ThreadScr:IsA("LocalScript") or ThreadScr:IsA("ModuleScript") then
-							local Parent: Instance? = ThreadScr.Parent
-							local ThreadLocation: string = "Unknown"
-							
-							if not Parent then
-								ThreadLocation = "Nil"
-							else
-								while Parent do
-									if Parent.Name == "ReplicatedFirst" then
-										ThreadLocation = "ReplicatedFirst"
-										break
-									end
-									if Parent:IsA("Actor") then
-										ThreadLocation = "Actor"
-										break
-									end
-									Parent = Parent.Parent
+			end
+			
+			if getnilinstances then
+				SPcall(function(): ()
+					local NilInst: {Instance} = getnilinstances()
+					for Idx: number = 1, #NilInst do
+						SPcall(function(): ()
+							local Inst: Instance = NilInst[Idx]
+							if Inst and (Inst:IsA("LocalScript") or Inst:IsA("ModuleScript")) then
+								AddScript(Inst, "Nil")
+							end
+						end)
+					end
+				end)
+			end
+			
+			local RepFirst: ReplicatedFirst = Services.ReplicatedFirst
+			for Idx: number, Inst: Instance in RepFirst:GetDescendants() do
+				if Inst:IsA("LocalScript") or Inst:IsA("ModuleScript") then
+					AddScript(Inst, "ReplicatedFirst")
+				end
+			end
+			
+			if getactors then
+				SPcall(function(): ()
+					local Actors: {Actor} = getactors()
+					for Idx: number = 1, #Actors do
+						SPcall(function(): ()
+							local Act: Actor = Actors[Idx]
+							for DescIdx: number, Desc: Instance in Act:GetDescendants() do
+								if Desc:IsA("LocalScript") or Desc:IsA("ModuleScript") then
+									AddScript(Desc, "Actor")
 								end
 							end
+						end)
+					end
+				end)
+			end
+			
+			local Reg: {any}? = nil
+			if getreg then
+				SPcall(function(): ()
+					Reg = getreg()
+				end)
+			end
+			
+			if not Reg and getregistry then
+				SPcall(function(): ()
+					Reg = getregistry()
+				end)
+			end
+			
+			if Reg then
+				for Idx: number = 1, #Reg do
+					local Obj: any = Reg[Idx]
+					
+					if SType(Obj) == "function" then
+						if isexecutorclosure and isexecutorclosure(Obj) then
+							continue
+						end
+						
+						if islclosure and not islclosure(Obj) then
+							continue
+						end
+						
+						local Info: {[string]: any} = debug.getinfo(Obj)
+						if Info.source and Info.source:sub(1, 1) == "@" then
+							local SrcName: string = Info.source:sub(2)
 							
-							if ThreadLocation == "ReplicatedFirst" or ThreadLocation == "Actor" or ThreadLocation == "Nil" then
-								ProcessedScripts[ThreadScr] = true
-								
-								if PossibleAC then
-									local FullName: string = ThreadScr:GetFullName()
-									if SFind(SLower(FullName), SLower(PossibleAC), 1, true) then
-										ByLocation[ThreadLocation][#ByLocation[ThreadLocation] + 1] = FullName
+							for ScrIdx: number, Scr: LuaSourceContainer in getscripts() do
+								if Scr:GetFullName() == SrcName or Scr.Name == SrcName then
+									if Scr:IsA("LocalScript") or Scr:IsA("ModuleScript") then
+										AddScript(Scr, "Registry")
 									end
-								else
-									ByLocation[ThreadLocation][#ByLocation[ThreadLocation] + 1] = ThreadScr:GetFullName()
 								end
 							end
 						end
+					end
+					
+					if typeof(Obj) == "thread" and getscriptfromthread then
+						SPcall(function(): ()
+							local Scr: LuaSourceContainer = getscriptfromthread(Obj)
+							if Scr and (Scr:IsA("LocalScript") or Scr:IsA("ModuleScript")) then
+								AddScript(Scr, "Registry")
+							end
+						end)
 					end
 				end
 			end
-		end
-	end
-	
-	if #ByLocation.ReplicatedFirst > 0 then
-		for i: number = 1, #ByLocation.ReplicatedFirst do
-			SWarn(`ReplicatedFirst: {ByLocation.ReplicatedFirst[i]}`)
-			Found[#Found + 1] = ByLocation.ReplicatedFirst[i]
-		end
-	end
-	
-	if #ByLocation.Actor > 0 then
-		for i: number = 1, #ByLocation.Actor do
-			SWarn(`Actor: {ByLocation.Actor[i]}`)
-			Found[#Found + 1] = ByLocation.Actor[i]
-		end
-	end
-	
-	if #ByLocation.Nil > 0 then
-		for i: number = 1, #ByLocation.Nil do
-			SWarn(`Nil: {ByLocation.Nil[i]}`)
-			Found[#Found + 1] = ByLocation.Nil[i]
-		end
-	end
-	
-	if setclipboard then
-		setclipboard(table.concat(Found, "\n"))
-	elseif toclipboard then
-		toclipboard(table.concat(Found, "\n"))
-	end
+			
+			task.spawn(function(): ()
+				if not getgc then return end
+				
+				local Funcs: {any} = getgc(false)
+				
+				for i: number = 1, #Funcs do
+					local f: any = Funcs[i]
+					if SType(f) == "function" then
+						if isexecutorclosure and isexecutorclosure(f) then
+							continue
+						end
+						
+						if islclosure and not islclosure(f) then
+							continue
+						end
+						
+						local Info: {[string]: any} = debug.getinfo(f)
+						if Info.source and Info.source:sub(1, 1) == "@" then
+							local SrcName: string = Info.source:sub(2)
+							
+							for ScrIdx: number, Scr: LuaSourceContainer in getscripts() do
+								if Scr:GetFullName() == SrcName or Scr.Name == SrcName then
+									if Scr:IsA("LocalScript") or Scr:IsA("ModuleScript") then
+										AddScript(Scr, "Registry")
+									end
+								end
+							end
+						end
+					end
+				end
+			end)
+			
+			task.wait(0.5)
+			
+			if #ByLocation.ReplicatedFirst > 0 then
+				for i: number = 1, #ByLocation.ReplicatedFirst do
+					SWarn(`ReplicatedFirst: {ByLocation.ReplicatedFirst[i]}`)
+					Found[#Found + 1] = ByLocation.ReplicatedFirst[i]
+				end
+			end
+			
+			if #ByLocation.Actor > 0 then
+				for i: number = 1, #ByLocation.Actor do
+					SWarn(`Actor: {ByLocation.Actor[i]}`)
+					Found[#Found + 1] = ByLocation.Actor[i]
+				end
+			end
+			
+			if #ByLocation.Nil > 0 then
+				for i: number = 1, #ByLocation.Nil do
+					SWarn(`Nil: {ByLocation.Nil[i]}`)
+					Found[#Found + 1] = ByLocation.Nil[i]
+				end
+			end
+			
+			if #ByLocation.Registry > 0 then
+				for i: number = 1, #ByLocation.Registry do
+					SWarn(`Registry: {ByLocation.Registry[i]}`)
+					Found[#Found + 1] = ByLocation.Registry[i]
+				end
+			end
+			
+			if setclipboard then
+				setclipboard(table.concat(Found, "\n"))
+			elseif toclipboard then
+				toclipboard(table.concat(Found, "\n"))
+			end
+		end)
+	end)
 	
 	return Found
 end
@@ -433,28 +460,31 @@ function Bynew.Hook(Options: string | HookOptions, Callback: ((fn: (...any) -> a
 	end
 	
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
-	local Functions: {any} = GetAllFunctions()
 	local Hooked: number = 0
 	
-	for i: number = 1, #Functions do
-		local Func: any = Functions[i]
+	if getgc then
+		local Funcs: {any} = getgc(false)
 		
-		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
-			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
-				local Original: (...any) -> any = FunctionButCloned(Func)
-				
-				if Callback then
-					Callback(Func)
-				else
-					DisableFunction(Func)
+		for i: number = 1, #Funcs do
+			local Func: any = Funcs[i]
+			
+			if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+				if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
+					local Original: (...any) -> any = FunctionButCloned(Func)
+					
+					if Callback then
+						Callback(Func)
+					else
+						DisableFunction(Func)
+					end
+					
+					Bynew.Hooks[Func] = {
+						Original = Original,
+						Active = true
+					}
+					
+					Hooked += 1
 				end
-				
-				Bynew.Hooks[Func] = {
-					Original = Original,
-					Active = true
-				}
-				
-				Hooked += 1
 			end
 		end
 	end
@@ -469,22 +499,25 @@ function Bynew.Replace(Options: string | HookOptions, Replacement: (...any) -> a
 	end
 	
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
-	local Functions: {any} = GetAllFunctions()
 	local Replaced: number = 0
 	
-	for i: number = 1, #Functions do
-		local Func: any = Functions[i]
+	if getgc then
+		local Funcs: {any} = getgc(false)
 		
-		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
-			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
-				local Original: (...any) -> any = hookfunction(Func, Replacement)
-				
-				Bynew.Hooks[Func] = {
-					Original = Original,
-					Active = true
-				}
-				
-				Replaced += 1
+		for i: number = 1, #Funcs do
+			local Func: any = Funcs[i]
+			
+			if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+				if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
+					local Original: (...any) -> any = hookfunction(Func, Replacement)
+					
+					Bynew.Hooks[Func] = {
+						Original = Original,
+						Active = true
+					}
+					
+					Replaced += 1
+				end
 			end
 		end
 	end
