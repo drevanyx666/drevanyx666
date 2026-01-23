@@ -163,6 +163,19 @@ local function ShouldHook(Func: (...any) -> any, Options: HookOptions): boolean
 	local ok: boolean, Info: any = SPcall(debug.getinfo, Func)
 	if not ok or not Info then return false end
 	
+	if Info.source and Info.source:sub(1, 1) == "@" then
+		local SrcName: string = Info.source:sub(2)
+		if getscripts then
+			local AllScripts: {LuaSourceContainer} = getscripts()
+			for i: number = 1, #AllScripts do
+				local Scr: LuaSourceContainer = AllScripts[i]
+				if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and not Scr:IsA("Script") then
+					return false
+				end
+			end
+		end
+	end
+	
 	if Options.ScriptName and not CheckScriptName(Info, Options.ScriptName) then
 		return false
 	end
@@ -221,18 +234,27 @@ local function DisableFunction(Func: (...any) -> any): ()
 			end
 		end
 	end
+end
+
+local function HasConstantsOrUpvalues(Func: (...any) -> any): boolean
+	local HasConsts: boolean = false
+	local HasUpvals: boolean = false
 	
-	if debug.getprotos then
-		local ok: boolean, Protos: any = SPcall(debug.getprotos, Func)
-		if ok and Protos then
-			for i: number = 1, #Protos do
-				local Proto: any = Protos[i]
-				if SType(Proto) == "function" then
-					DisableFunction(Proto)
-				end
-			end
+	if debug.getconstants then
+		local ok: boolean, Constants: any = SPcall(debug.getconstants, Func)
+		if ok and Constants and #Constants > 0 then
+			HasConsts = true
 		end
 	end
+	
+	if debug.getupvalues then
+		local ok: boolean, Upvalues: any = SPcall(debug.getupvalues, Func)
+		if ok and Upvalues and next(Upvalues) then
+			HasUpvals = true
+		end
+	end
+	
+	return HasConsts or HasUpvals
 end
 
 local function GetAllFunctions(): {any}
@@ -479,11 +501,17 @@ function Bynew.Hook(Options: string | HookOptions, Callback: ((fn: (...any) -> a
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
 	local Functions: {any} = GetAllFunctions()
 	local Hooked: number = 0
+	local Skipped: number = 0
 	
 	for i: number = 1, #Functions do
 		local Func: any = Functions[i]
 		
 		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+			if not HasConstantsOrUpvalues(Func) then
+				Skipped += 1
+				continue
+			end
+			
 			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
 				local Original: (...any) -> any = FunctionButCloned(Func)
 				
@@ -503,6 +531,10 @@ function Bynew.Hook(Options: string | HookOptions, Callback: ((fn: (...any) -> a
 		end
 	end
 	
+	if Skipped > 0 then
+		SWarn(`Cannot hook {Skipped} function(s) due to having 0 constants & upvalues`)
+	end
+	
 	return Hooked
 end
 
@@ -515,11 +547,17 @@ function Bynew.Replace(Options: string | HookOptions, Replacement: (...any) -> a
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
 	local Functions: {any} = GetAllFunctions()
 	local Replaced: number = 0
+	local Skipped: number = 0
 	
 	for i: number = 1, #Functions do
 		local Func: any = Functions[i]
 		
 		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+			if not HasConstantsOrUpvalues(Func) then
+				Skipped += 1
+				continue
+			end
+			
 			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
 				local Original: (...any) -> any = hookfunction(Func, Replacement)
 				
@@ -531,6 +569,10 @@ function Bynew.Replace(Options: string | HookOptions, Replacement: (...any) -> a
 				Replaced += 1
 			end
 		end
+	end
+	
+	if Skipped > 0 then
+		SWarn(`Cannot replace {Skipped} function(s) due to having 0 constants & upvalues`)
 	end
 	
 	return Replaced
