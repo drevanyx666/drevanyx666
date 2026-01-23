@@ -1,3 +1,5 @@
+--!strict
+
 local FunctionButCloned: <T>(T) -> T = clonefunction or function<T>(f: T): T return f end
 
 local GetService: (Instance, string) -> Instance = FunctionButCloned(game.GetService)
@@ -39,28 +41,6 @@ local Bynew = {
 local function GetExecutorName(): string
 	local ok: boolean, Name: any = SPcall(identifyexecutor)
 	return ok and Name or "idk this executor"
-end
-
-local function GetScriptFromFunction(Func: (...any) -> any): LuaSourceContainer?
-	if not getscripts then return nil end
-	
-	local ok: boolean, Info: any = SPcall(debug.getinfo, Func)
-	if not ok or not Info or not Info.source then return nil end
-	
-	local Source: string = Info.source
-	if Source:sub(1, 1) == "@" then
-		Source = Source:sub(2)
-	end
-	
-	local AllScripts: {LuaSourceContainer} = getscripts()
-	for i: number = 1, #AllScripts do
-		local Scr: LuaSourceContainer = AllScripts[i]
-		if Scr:GetFullName() == Source or Scr.Name == Source then
-			return Scr
-		end
-	end
-	
-	return nil
 end
 
 local function GetFunctionAddress(Func: (...any) -> any): string?
@@ -146,13 +126,26 @@ local function CheckFunctionHash(Func: (...any) -> any, TargetHash: string): boo
 end
 
 local function CheckScriptHash(Func: (...any) -> any, TargetHash: string): boolean
-	if not getscripthash then return false end
+	if not getscripthash or not getscripts then return false end
 	
-	local Scr: LuaSourceContainer? = GetScriptFromFunction(Func)
-	if not Scr then return false end
+	local ok: boolean, Info: any = SPcall(debug.getinfo, Func)
+	if not ok or not Info or not Info.source then return false end
 	
-	local ok: boolean, Hash: any = SPcall(getscripthash, Scr)
-	return ok and Hash == TargetHash
+	local Source: string = Info.source
+	if Source:sub(1, 1) == "@" then
+		Source = Source:sub(2)
+	end
+	
+	local AllScripts: {LuaSourceContainer} = getscripts()
+	for i: number = 1, #AllScripts do
+		local Scr: LuaSourceContainer = AllScripts[i]
+		if Scr:GetFullName() == Source or Scr.Name == Source then
+			local ok2: boolean, Hash: any = SPcall(getscripthash, Scr)
+			return ok2 and Hash == TargetHash
+		end
+	end
+	
+	return false
 end
 
 local function ShouldHook(Func: (...any) -> any, Options: HookOptions): boolean
@@ -224,6 +217,7 @@ end
 local function GetAllFunctions(): {any}
 	local Processed: {[any]: boolean} = {}
 	local AllFunctions: {any} = {}
+	local Count: number = 0
 	
 	if filtergc then
 		local ok: boolean, Result: any = SPcall(filtergc, "function")
@@ -232,7 +226,8 @@ local function GetAllFunctions(): {any}
 			for i: number = 1, #FuncList do
 				local Func: any = FuncList[i]
 				if not Processed[Func] then
-					AllFunctions[#AllFunctions + 1] = Func
+					Count += 1
+					AllFunctions[Count] = Func
 					Processed[Func] = true
 				end
 			end
@@ -245,7 +240,8 @@ local function GetAllFunctions(): {any}
 			for i: number = 1, #GcFuncs do
 				local Func: any = GcFuncs[i]
 				if SType(Func) == "function" and not Processed[Func] then
-					AllFunctions[#AllFunctions + 1] = Func
+					Count += 1
+					AllFunctions[Count] = Func
 					Processed[Func] = true
 				end
 			end
@@ -257,9 +253,7 @@ local function GetAllFunctions(): {any}
 		SPcall(function(): ()
 			Reg = getreg()
 		end)
-	end
-	
-	if not Reg and getregistry then
+	elseif getregistry then
 		SPcall(function(): ()
 			Reg = getregistry()
 		end)
@@ -277,7 +271,8 @@ local function GetAllFunctions(): {any}
 					continue
 				end
 				
-				AllFunctions[#AllFunctions + 1] = Obj
+				Count += 1
+				AllFunctions[Count] = Obj
 				Processed[Obj] = true
 			end
 		end
@@ -289,8 +284,10 @@ end
 function Bynew.Find(PossibleAC: string?): {string}
 	local Found: {string} = {}
 	local FoundSet: {[string]: boolean} = {}
+	local Count: number = 0
 	
 	if PossibleAC then
+		local SearchLower: string = SLower(PossibleAC)
 		local Functions: {any} = GetAllFunctions()
 		
 		for i: number = 1, #Functions do
@@ -299,20 +296,17 @@ function Bynew.Find(PossibleAC: string?): {string}
 				local ok: boolean, Info: any = SPcall(debug.getinfo, Func)
 				if ok and Info and Info.source then
 					local Source: string = SLower(SToString(Info.source))
-					if SFind(Source, SLower(PossibleAC), 1, true) and not FoundSet[Info.source] then
-						Found[#Found + 1] = Info.source
+					if SFind(Source, SearchLower, 1, true) and not FoundSet[Info.source] then
+						Count += 1
+						Found[Count] = Info.source
 						FoundSet[Info.source] = true
 					end
 				end
 			end
-			
-			if i % 1000 == 0 then
-				task.wait()
-			end
 		end
 		
-		if #Found > 0 then
-			for i: number = 1, #Found do
+		if Count > 0 then
+			for i: number = 1, Count do
 				SWarn(Found[i])
 			end
 		end
@@ -327,8 +321,15 @@ function Bynew.Find(PossibleAC: string?): {string}
 	end
 	
 	local FoundScripts: {[LuaSourceContainer]: string} = {}
+	local ScriptCache: {LuaSourceContainer}? = nil
 	
-	if getgc and getscripts then
+	if getscripts then
+		SPcall(function(): ()
+			ScriptCache = getscripts()
+		end)
+	end
+	
+	if getgc and ScriptCache then
 		local ok: boolean, GcFuncs: any = SPcall(getgc, false)
 		if ok and GcFuncs then
 			for i: number = 1, #GcFuncs do
@@ -348,20 +349,14 @@ function Bynew.Find(PossibleAC: string?): {string}
 							SrcName = SrcName:sub(2)
 						end
 						
-						local AllScripts: {LuaSourceContainer} = getscripts()
-						for j: number = 1, #AllScripts do
-							local Scr: LuaSourceContainer = AllScripts[j]
-							if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and (Scr:IsA("LocalScript") or Scr:IsA("ModuleScript") or Scr:IsA("Script")) then
-								if not FoundScripts[Scr] then
-									FoundScripts[Scr] = "GC"
-								end
+						for j: number = 1, #ScriptCache do
+							local Scr: LuaSourceContainer = ScriptCache[j]
+							if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and not FoundScripts[Scr] then
+								FoundScripts[Scr] = "GC"
+								break
 							end
 						end
 					end
-				end
-				
-				if i % 1000 == 0 then
-					task.wait()
 				end
 			end
 		end
@@ -372,15 +367,13 @@ function Bynew.Find(PossibleAC: string?): {string}
 		SPcall(function(): ()
 			Reg = getreg()
 		end)
-	end
-	
-	if not Reg and getregistry then
+	elseif getregistry then
 		SPcall(function(): ()
 			Reg = getregistry()
 		end)
 	end
 	
-	if Reg and getscripts then
+	if Reg and ScriptCache then
 		for i: number = 1, #Reg do
 			local Obj: any = Reg[i]
 			
@@ -397,20 +390,14 @@ function Bynew.Find(PossibleAC: string?): {string}
 				if ok and Info and Info.source and Info.source:sub(1, 1) == "@" then
 					local SrcName: string = Info.source:sub(2)
 					
-					local AllScripts: {LuaSourceContainer} = getscripts()
-					for j: number = 1, #AllScripts do
-						local Scr: LuaSourceContainer = AllScripts[j]
-						if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and (Scr:IsA("LocalScript") or Scr:IsA("ModuleScript") or Scr:IsA("Script")) then
-							if not FoundScripts[Scr] then
-								FoundScripts[Scr] = "Reg"
-							end
+					for j: number = 1, #ScriptCache do
+						local Scr: LuaSourceContainer = ScriptCache[j]
+						if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and not FoundScripts[Scr] then
+							FoundScripts[Scr] = "Reg"
+							break
 						end
 					end
 				end
-			end
-			
-			if i % 1000 == 0 then
-				task.wait()
 			end
 		end
 	end
@@ -422,7 +409,9 @@ function Bynew.Find(PossibleAC: string?): {string}
 	if ok and RepFirst then
 		for idx: number, Child: Instance in RepFirst:GetDescendants() do
 			if Child:IsA("LocalScript") or Child:IsA("ModuleScript") or Child:IsA("Script") then
-				FoundScripts[Child] = "ReplicatedFirst"
+				if not FoundScripts[Child] then
+					FoundScripts[Child] = "ReplicatedFirst"
+				end
 			end
 		end
 	end
@@ -433,7 +422,9 @@ function Bynew.Find(PossibleAC: string?): {string}
 			for idx: number, Inst: any in NilInsts do
 				if SType(Inst) == "userdata" and typeof(Inst) == "Instance" then
 					if Inst:IsA("LocalScript") or Inst:IsA("ModuleScript") or Inst:IsA("Script") then
-						FoundScripts[Inst] = "Nil"
+						if not FoundScripts[Inst] then
+							FoundScripts[Inst] = "Nil"
+						end
 					end
 				end
 			end
@@ -449,13 +440,14 @@ function Bynew.Find(PossibleAC: string?): {string}
 		end
 		
 		if #Name > 0 and not FoundSet[Name] then
-			Found[#Found + 1] = Name
+			Count += 1
+			Found[Count] = Name
 			FoundSet[Name] = true
 		end
 	end
 	
-	if #Found > 0 then
-		for i: number = 1, #Found do
+	if Count > 0 then
+		for i: number = 1, Count do
 			SWarn(Found[i])
 		end
 	end
@@ -500,10 +492,6 @@ function Bynew.Hook(Options: string | HookOptions, Callback: ((fn: (...any) -> a
 				Hooked += 1
 			end
 		end
-		
-		if i % 1000 == 0 then
-			task.wait()
-		end
 	end
 	
 	return Hooked
@@ -533,10 +521,6 @@ function Bynew.Replace(Options: string | HookOptions, Replacement: (...any) -> a
 				
 				Replaced += 1
 			end
-		end
-		
-		if i % 1000 == 0 then
-			task.wait()
 		end
 	end
 	
