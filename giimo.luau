@@ -272,6 +272,32 @@ function Bynew.Find(PossibleAC: string?): {string}
 	local FoundSet: {[string]: boolean} = {}
 	
 	if PossibleAC then
+		if getgc then
+			local ok: boolean, GcFuncs: any = SPcall(getgc, false)
+			if ok and GcFuncs then
+				for i: number = 1, #GcFuncs do
+					if SType(GcFuncs[i]) == "function" then
+						if isexecutorclosure and isexecutorclosure(GcFuncs[i]) then
+							continue
+						end
+						
+						if islclosure and not islclosure(GcFuncs[i]) then
+							continue
+						end
+						
+						local ok2: boolean, Info: any = SPcall(debug.getinfo, GcFuncs[i])
+						if ok2 and Info and Info.source then
+							local Source: string = SLower(SToString(Info.source))
+							if SFind(Source, SLower(PossibleAC), 1, true) and not FoundSet[Info.source] then
+								Found[#Found + 1] = Info.source
+								FoundSet[Info.source] = true
+							end
+						end
+					end
+				end
+			end
+		end
+		
 		local Reg: {any}? = nil
 		if getreg then
 			SPcall(function(): ()
@@ -310,32 +336,6 @@ function Bynew.Find(PossibleAC: string?): {string}
 			end
 		end
 		
-		if getgc then
-			local ok: boolean, GcFuncs: any = SPcall(getgc, false)
-			if ok and GcFuncs then
-				for i: number = 1, #GcFuncs do
-					if SType(GcFuncs[i]) == "function" then
-						if isexecutorclosure and isexecutorclosure(GcFuncs[i]) then
-							continue
-						end
-						
-						if islclosure and not islclosure(GcFuncs[i]) then
-							continue
-						end
-						
-						local ok2: boolean, Info: any = SPcall(debug.getinfo, GcFuncs[i])
-						if ok2 and Info and Info.source then
-							local Source: string = SLower(SToString(Info.source))
-							if SFind(Source, SLower(PossibleAC), 1, true) and not FoundSet[Info.source] then
-								Found[#Found + 1] = Info.source
-								FoundSet[Info.source] = true
-							end
-						end
-					end
-				end
-			end
-		end
-		
 		if #Found > 0 then
 			for i: number = 1, #Found do
 				SWarn(Found[i])
@@ -353,49 +353,7 @@ function Bynew.Find(PossibleAC: string?): {string}
 	
 	local FoundScripts: {[LuaSourceContainer]: string} = {}
 	
-	local Reg: {any}? = nil
-	if getreg then
-		SPcall(function(): ()
-			Reg = getreg()
-		end)
-	end
-	
-	if not Reg and getregistry then
-		SPcall(function(): ()
-			Reg = getregistry()
-		end)
-	end
-	
-	if Reg and getscripts then
-		for i: number = 1, #Reg do
-			local Obj: any = Reg[i]
-			
-			if SType(Obj) == "function" then
-				if isexecutorclosure and isexecutorclosure(Obj) then
-					continue
-				end
-				
-				if islclosure and not islclosure(Obj) then
-					continue
-				end
-				
-				local ok: boolean, Info: any = SPcall(debug.getinfo, Obj)
-				if ok and Info and Info.source and Info.source:sub(1, 1) == "@" then
-					local SrcName: string = Info.source:sub(2)
-					
-					local AllScripts: {LuaSourceContainer} = getscripts()
-					for j: number = 1, #AllScripts do
-						local Scr: LuaSourceContainer = AllScripts[j]
-						if (Scr:GetFullName() == SrcName or Scr.Name == SrcName) and (Scr:IsA("LocalScript") or Scr:IsA("ModuleScript")) then
-							if not FoundScripts[Scr] then
-								FoundScripts[Scr] = "Normal"
-							end
-						end
-					end
-				end
-			end
-		end
-	end
+
 	
 	local ok: boolean, RepFirst: any = SPcall(function(): Instance
 		return Services.ReplicatedFirst
@@ -444,11 +402,11 @@ function Bynew.Find(PossibleAC: string?): {string}
 			Name = `Nil.{Scr.Name}`
 		elseif Category == "Actor" then
 			Name = `Actor.{Scr:GetFullName()}`
-		else
+		elseif Category == "ReplicatedFirst" then
 			Name = Scr:GetFullName()
 		end
 		
-		if not FoundSet[Name] then
+		if #Name > 0 and not FoundSet[Name] then
 			Found[#Found + 1] = Name
 			FoundSet[Name] = true
 		end
