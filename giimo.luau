@@ -190,34 +190,37 @@ local function DisableFunction(Func: (...any) -> any): ()
 			end
 		end
 	end
-	
-	if debug.getprotos then
-		local ok: boolean, Protos: any = SPcall(debug.getprotos, Func)
-		if ok and Protos then
-			for i: number = 1, #Protos do
-				local Proto: any = Protos[i]
-				if SType(Proto) == "function" then
-					DisableFunction(Proto)
-				end
-			end
-		end
-	end
 end
 
-local function GetAllFunctions(): {any}
-	local AllFuncs: {any} = {}
+local function GetAllFunctionsChunked(ChunkSize: number, Callback: ({any}) -> ()): ()
 	local Processed: {[any]: boolean} = {}
+	local CurrentChunk: {any} = {}
+	local TotalProcessed: number = 0
+	
+	local function ProcessChunk(): ()
+		if #CurrentChunk > 0 then
+			Callback(CurrentChunk)
+			TotalProcessed += #CurrentChunk
+			CurrentChunk = {}
+		end
+	end
 	
 	if filtergc then
 		local ok: boolean, Result: any = SPcall(filtergc, "function")
 		if ok and Result then
 			local FuncList: {any} = SType(Result) == "table" and Result or {Result}
 			for i: number = 1, #FuncList do
-				if not Processed[FuncList[i]] then
-					AllFuncs[#AllFuncs + 1] = FuncList[i]
-					Processed[FuncList[i]] = true
+				local Func: any = FuncList[i]
+				if not Processed[Func] then
+					CurrentChunk[#CurrentChunk + 1] = Func
+					Processed[Func] = true
+					
+					if #CurrentChunk >= ChunkSize then
+						ProcessChunk()
+					end
 				end
 			end
+			ProcessChunk()
 		end
 	end
 	
@@ -225,11 +228,17 @@ local function GetAllFunctions(): {any}
 		local ok: boolean, GcFuncs: any = SPcall(getgc, false)
 		if ok and GcFuncs then
 			for i: number = 1, #GcFuncs do
-				if SType(GcFuncs[i]) == "function" and not Processed[GcFuncs[i]] then
-					AllFuncs[#AllFuncs + 1] = GcFuncs[i]
-					Processed[GcFuncs[i]] = true
+				local Func: any = GcFuncs[i]
+				if SType(Func) == "function" and not Processed[Func] then
+					CurrentChunk[#CurrentChunk + 1] = Func
+					Processed[Func] = true
+					
+					if #CurrentChunk >= ChunkSize then
+						ProcessChunk()
+					end
 				end
 			end
+			ProcessChunk()
 		end
 	end
 	
@@ -258,13 +267,18 @@ local function GetAllFunctions(): {any}
 					continue
 				end
 				
-				AllFuncs[#AllFuncs + 1] = Obj
+				CurrentChunk[#CurrentChunk + 1] = Obj
 				Processed[Obj] = true
+				
+				if #CurrentChunk >= ChunkSize then
+					ProcessChunk()
+				end
 			end
 		end
+		ProcessChunk()
 	end
 	
-	return AllFuncs
+	SWarn(`Total functions processed: {TotalProcessed}`)
 end
 
 function Bynew.Find(PossibleAC: string?): {string}
@@ -511,32 +525,36 @@ function Bynew.Hook(Options: string | HookOptions, Callback: ((fn: (...any) -> a
 	end
 	
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
-	local Functions: {any} = GetAllFunctions()
 	local Hooked: number = 0
 	
-	for i: number = 1, #Functions do
-		local Func: any = Functions[i]
-		
-		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
-			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
-				local Original: (...any) -> any = FunctionButCloned(Func)
-				
-				if Callback then
-					Callback(Func)
-				else
-					DisableFunction(Func)
+	GetAllFunctionsChunked(4000, function(Chunk: {any}): ()
+		for i: number = 1, #Chunk do
+			local Func: any = Chunk[i]
+			
+			if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+				if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
+					local Original: (...any) -> any = FunctionButCloned(Func)
+					
+					if Callback then
+						Callback(Func)
+					else
+						DisableFunction(Func)
+					end
+					
+					Bynew.Hooks[Func] = {
+						Original = Original,
+						Active = true
+					}
+					
+					Hooked += 1
 				end
-				
-				Bynew.Hooks[Func] = {
-					Original = Original,
-					Active = true
-				}
-				
-				Hooked += 1
 			end
 		end
-	end
+		
+		SWarn(`Processed chunk, hooked: {Hooked}`)
+	end)
 	
+	SWarn(`Scan complete, total hooked: {Hooked}`)
 	return Hooked
 end
 
@@ -547,26 +565,30 @@ function Bynew.Replace(Options: string | HookOptions, Replacement: (...any) -> a
 	end
 	
 	local HookOpts: HookOptions = SType(Options) == "string" and {ScriptName = Options} or Options
-	local Functions: {any} = GetAllFunctions()
 	local Replaced: number = 0
 	
-	for i: number = 1, #Functions do
-		local Func: any = Functions[i]
-		
-		if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
-			if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
-				local Original: (...any) -> any = hookfunction(Func, Replacement)
-				
-				Bynew.Hooks[Func] = {
-					Original = Original,
-					Active = true
-				}
-				
-				Replaced += 1
+	GetAllFunctionsChunked(4000, function(Chunk: {any}): ()
+		for i: number = 1, #Chunk do
+			local Func: any = Chunk[i]
+			
+			if SType(Func) == "function" and ShouldHook(Func, HookOpts) then
+				if not Bynew.Hooks[Func] or not Bynew.Hooks[Func].Active then
+					local Original: (...any) -> any = hookfunction(Func, Replacement)
+					
+					Bynew.Hooks[Func] = {
+						Original = Original,
+						Active = true
+					}
+					
+					Replaced += 1
+				end
 			end
 		end
-	end
+		
+		SWarn(`Processed chunk, replaced: {Replaced}`)
+	end)
 	
+	SWarn(`Scan complete, total replaced: {Replaced}`)
 	return Replaced
 end
 
